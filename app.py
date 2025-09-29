@@ -1,80 +1,82 @@
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
-import yt_dlp
+from flask import Flask, request, jsonify, send_from_directory
+from yt_dlp import YoutubeDL
+from urllib.parse import quote
 import os
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
 
-# Ensure downloads folder exists
-DOWNLOAD_FOLDER = os.path.join(os.getcwd(), "downloads")
-if not os.path.exists(DOWNLOAD_FOLDER):
-    os.makedirs(DOWNLOAD_FOLDER)
+# Folder to save downloads
+DOWNLOAD_FOLDER = os.path.join(os.getcwd(), 'downloads')
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
+# Cookies file for YouTube login
+COOKIES_FILE = os.path.join(os.getcwd(), 'cookies.txt')  # Make sure this exists if needed
 
-@app.route("/download", methods=["POST"])
-def download_youtube():
-    """
-    Expects JSON: { "url": "<youtube_link>", "format": "mp4" or "mp3" }
-    Returns JSON with file path and title.
-    """
-    data = request.json
-    if not data or "url" not in data:
-        return jsonify({"error": "Missing 'url' in request"}), 400
+# --- CORS ---
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    return response
 
-    url = data["url"]
-    fmt = data.get("format", "mp4").lower()
-    if fmt not in ["mp4", "mp3"]:
-        return jsonify({"error": "Invalid format, must be 'mp4' or 'mp3'"}), 400
+# --- Download endpoint ---
+@app.route('/download', methods=['POST'])
+def download():
+    data = request.get_json()
+    if not data or 'url' not in data:
+        return jsonify({'error': 'Missing URL'}), 400
+
+    url = data['url']
+    format_choice = data.get('format', 'mp4')  # Default to mp4, or use 'mp3'
 
     ydl_opts = {
-    "outtmpl": os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s"),
-    "cookiefile": "cookies.txt",  # <-- this tells yt-dlp to use your login cookies
-}
+        'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
+        'noplaylist': True,
+        'cookies': COOKIES_FILE if os.path.exists(COOKIES_FILE) else None,
+    }
 
-
-    if fmt == "mp3":
+    # MP3 options
+    if format_choice.lower() == 'mp3':
         ydl_opts.update({
-            "format": "bestaudio/best",
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
             }],
         })
-    else:
+    else:  # MP4 options
         ydl_opts.update({
-            "format": "bestvideo+bestaudio/best",
+            'format': 'bestvideo+bestaudio/best',
+            'merge_output_format': 'mp4',
         })
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            file_path = ydl.prepare_filename(info)
-            if fmt == "mp3":
-                file_path = os.path.splitext(file_path)[0] + ".mp3"
+            filename = ydl.prepare_filename(info)
+            if format_choice.lower() == 'mp3':
+                filename = os.path.splitext(filename)[0] + '.mp3'
 
-        file_url = request.host_url + "downloads/" + os.path.basename(file_path)
-        return jsonify({
-            "file_url": file_url,
-            "format": fmt,
-            "title": info.get("title")
-        })
+            # Encode URL for web-safe characters
+            file_url = request.host_url + 'downloads/' + quote(os.path.basename(filename))
 
-    except yt_dlp.utils.DownloadError as e:
-        return jsonify({"error": str(e)}), 500
+            return jsonify({
+                'file_url': file_url,
+                'format': format_choice.lower(),
+                'title': info.get('title', 'Unknown Title')
+            })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
-@app.route("/downloads/<filename>")
+# --- Serve downloaded files ---
+@app.route('/downloads/<path:filename>', methods=['GET'])
 def serve_file(filename):
-    """Serve downloaded files"""
-    file_path = os.path.join(DOWNLOAD_FOLDER, filename)
-    if os.path.exists(file_path):
-        return send_file(file_path, as_attachment=True)
-    else:
-        return jsonify({"error": "File not found"}), 404
+    return send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True)
 
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)
