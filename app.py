@@ -1,28 +1,34 @@
-import os
 from flask import Flask, request, jsonify
 import yt_dlp
 
 app = Flask(__name__)
 
-@app.route('/download', methods=['POST'])
-def download():
-    data = request.json
-    url = data.get('url')
+@app.route("/download", methods=["POST"])
+def download_video():
+    data = request.get_json()
+    url = data.get("url")
+
     if not url:
-        return jsonify({'status': 'error', 'message': 'URL required'}), 400
+        return jsonify({"error": "No URL provided"}), 400
 
-    ydl_opts = {}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        result = {
-            'title': info.get('title'),
-            'id': info.get('id'),
-            'duration': info.get('duration'),
-            'thumbnail': info.get('thumbnail'),
-            'formats': info.get('formats')  # or filter best
+    try:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'noplaylist': True,
+            'skip_download': True  # Important! Avoids authentication issues
         }
-    return jsonify({'status': 'success', 'data': result})
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        return jsonify({
+            "title": info.get("title"),
+            "duration": info.get("duration"),
+            "formats": info.get("formats")
+        })
+
+    except yt_dlp.utils.DownloadError as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
