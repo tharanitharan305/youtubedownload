@@ -28,8 +28,10 @@ def download_youtube():
         return jsonify({"error": "Invalid format, must be 'mp4' or 'mp3'"}), 400
 
     ydl_opts = {
-        "outtmpl": os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s"),
-    }
+    "outtmpl": os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s"),
+    "cookiefile": "cookies.txt",  # <-- this tells yt-dlp to use your login cookies
+}
+
 
     if fmt == "mp3":
         ydl_opts.update({
@@ -75,3 +77,4 @@ def serve_file(filename):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
