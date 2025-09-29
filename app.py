@@ -1,56 +1,77 @@
-from flask import Flask, request, jsonify, send_from_directory
-import os
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
 import yt_dlp
+import os
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
-# Folder to store downloaded files
+# Ensure downloads folder exists
 DOWNLOAD_FOLDER = os.path.join(os.getcwd(), "downloads")
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+if not os.path.exists(DOWNLOAD_FOLDER):
+    os.makedirs(DOWNLOAD_FOLDER)
+
 
 @app.route("/download", methods=["POST"])
 def download_youtube():
-    data = request.get_json()
+    """
+    Expects JSON: { "url": "<youtube_link>", "format": "mp4" or "mp3" }
+    Returns JSON with file path and title.
+    """
+    data = request.json
     if not data or "url" not in data:
-        return jsonify({"error": "No URL provided"}), 400
+        return jsonify({"error": "Missing 'url' in request"}), 400
 
     url = data["url"]
-    format_choice = data.get("format", "mp4")  # default is mp4
+    fmt = data.get("format", "mp4").lower()
+    if fmt not in ["mp4", "mp3"]:
+        return jsonify({"error": "Invalid format, must be 'mp4' or 'mp3'"}), 400
 
     ydl_opts = {
         "outtmpl": os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s"),
-        "format": "bestaudio/best" if format_choice == "mp3" else "best",
-        "postprocessors": [
-            {
+    }
+
+    if fmt == "mp3":
+        ydl_opts.update({
+            "format": "bestaudio/best",
+            "postprocessors": [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
-            }
-        ] if format_choice == "mp3" else [],
-        "quiet": True,
-        "no_warnings": True,
-    }
+            }],
+        })
+    else:
+        ydl_opts.update({
+            "format": "bestvideo+bestaudio/best",
+        })
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            title = info.get("title", "file")
-            ext = "mp3" if format_choice == "mp3" else info.get("ext", "mp4")
-            filename = f"{title}.{ext}"
-            file_url = request.host_url + "downloads/" + filename
-            return jsonify({
-                "file_url": file_url,
-                "format": ext,
-                "title": title
-            })
+            file_path = ydl.prepare_filename(info)
+            if fmt == "mp3":
+                file_path = os.path.splitext(file_path)[0] + ".mp3"
+
+        file_url = request.host_url + "downloads/" + os.path.basename(file_path)
+        return jsonify({
+            "file_url": file_url,
+            "format": fmt,
+            "title": info.get("title")
+        })
 
     except yt_dlp.utils.DownloadError as e:
         return jsonify({"error": str(e)}), 500
 
-# Serve downloaded files
-@app.route("/downloads/<path:filename>")
+
+@app.route("/downloads/<filename>")
 def serve_file(filename):
-    return send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True)
+    """Serve downloaded files"""
+    file_path = os.path.join(DOWNLOAD_FOLDER, filename)
+    if os.path.exists(file_path):
+        return send_file(file_path, as_attachment=True)
+    else:
+        return jsonify({"error": "File not found"}), 404
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
