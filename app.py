@@ -3,6 +3,7 @@ from yt_dlp import YoutubeDL
 from urllib.parse import quote
 import os
 import logging
+import shutil
 
 app = Flask(__name__)
 
@@ -17,7 +18,7 @@ os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 # --- IMPORTANT: Path to the secret cookies file on Render ---
 # Render mounts secret files at /etc/secrets/<filename>.
 # This is the correct way to access the file you created.
-COOKIE_FILE_PATH = '/etc/secrets/cookies.txt'
+SECRET_COOKIE_FILE_PATH = '/etc/secrets/cookies.txt'
 
 # --- CORS Headers ---
 @app.after_request
@@ -36,6 +37,8 @@ def download():
 
     url = data['url']
     format_choice = data.get('format', 'mp4')
+    
+    temp_cookie_file_path = None # To keep track of the temporary file
 
     ydl_opts = {
         'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
@@ -44,11 +47,19 @@ def download():
     }
 
     # --- Use cookies if the secret file exists at the specified path ---
-    if os.path.exists(COOKIE_FILE_PATH):
-        ydl_opts['cookiefile'] = COOKIE_FILE_PATH
-        logging.info(f"Using cookie file from {COOKIE_FILE_PATH}")
+    if os.path.exists(SECRET_COOKIE_FILE_PATH):
+        try:
+            # Create a temporary, writable copy of the read-only secret file
+            temp_cookie_file_path = os.path.join(DOWNLOAD_FOLDER, 'cookies_temp.txt')
+            shutil.copyfile(SECRET_COOKIE_FILE_PATH, temp_cookie_file_path)
+
+            ydl_opts['cookiefile'] = temp_cookie_file_path
+            logging.info(f"Using temporary cookie file copied from {SECRET_COOKIE_FILE_PATH}")
+        except Exception as e:
+            logging.error(f"Could not create temp cookie file: {e}")
+            temp_cookie_file_path = None # Ensure we don't try to use a failed copy
     else:
-        logging.warning(f"Cookie file not found at {COOKIE_FILE_PATH}. Downloads may fail for bot-protected content.")
+        logging.warning(f"Secret cookie file not found at {SECRET_COOKIE_FILE_PATH}. Downloads may fail.")
 
 
     if format_choice.lower() == 'mp3':
@@ -93,6 +104,11 @@ def download():
         # This provides a much more detailed error back to your Flutter app
         logging.error(f"yt-dlp error: {str(e)}")
         return jsonify({'error': f"An error occurred: {str(e)}"}), 500
+    finally:
+        # --- Clean up the temporary cookie file after the request is done ---
+        if temp_cookie_file_path and os.path.exists(temp_cookie_file_path):
+            os.remove(temp_cookie_file_path)
+            logging.info("Cleaned up temporary cookie file.")
 
 
 # --- Serve downloaded files ---
