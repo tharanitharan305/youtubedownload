@@ -14,9 +14,10 @@ logging.basicConfig(level=logging.INFO)
 DOWNLOAD_FOLDER = os.path.join(os.getcwd(), 'downloads')
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-# --- IMPORTANT: Get cookies from environment variable ---
-# This is more secure and reliable than a static file.
-YOUTUBE_COOKIES = os.environ.get('YOUTUBE_COOKIES_TXT')
+# --- IMPORTANT: Path to the secret cookies file on Render ---
+# Render mounts secret files at /etc/secrets/<filename>.
+# This is the correct way to access the file you created.
+COOKIE_FILE_PATH = '/etc/secrets/cookies.txt'
 
 # --- CORS Headers ---
 @app.after_request
@@ -42,16 +43,12 @@ def download():
         'quiet': True, # Reduces console spam
     }
 
-    # --- Use cookies if they exist in the environment ---
-    if YOUTUBE_COOKIES:
-        # yt-dlp needs a file path, so we create a temporary one
-        temp_cookie_file = os.path.join(DOWNLOAD_FOLDER, 'cookies_temp.txt')
-        with open(temp_cookie_file, 'w') as f:
-            f.write(YOUTUBE_COOKIES)
-        ydl_opts['cookiefile'] = temp_cookie_file
-        logging.info("Using cookies for download.")
+    # --- Use cookies if the secret file exists at the specified path ---
+    if os.path.exists(COOKIE_FILE_PATH):
+        ydl_opts['cookiefile'] = COOKIE_FILE_PATH
+        logging.info(f"Using cookie file from {COOKIE_FILE_PATH}")
     else:
-        logging.warning("No cookies found. Downloads may fail for age-restricted content.")
+        logging.warning(f"Cookie file not found at {COOKIE_FILE_PATH}. Downloads may fail for bot-protected content.")
 
 
     if format_choice.lower() == 'mp3':
@@ -96,10 +93,6 @@ def download():
         # This provides a much more detailed error back to your Flutter app
         logging.error(f"yt-dlp error: {str(e)}")
         return jsonify({'error': f"An error occurred: {str(e)}"}), 500
-    finally:
-        # Clean up the temporary cookie file if it was created
-        if 'cookiefile' in ydl_opts and os.path.exists(ydl_opts['cookiefile']):
-            os.remove(ydl_opts['cookiefile'])
 
 
 # --- Serve downloaded files ---
@@ -111,3 +104,4 @@ def serve_file(filename):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
