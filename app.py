@@ -7,17 +7,17 @@ import shutil
 
 app = Flask(__name__)
 
-# --- Basic Logging Setup ---
-logging.basicConfig(level=logging.INFO)
+# === Logging ===
+logging.basicConfig(level=logging.INFO, encoding='utf-8')
 
-# --- Folder to save downloads ---
+# === Download Folder ===
 DOWNLOAD_FOLDER = os.path.join(os.getcwd(), 'downloads')
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-# --- Path to secret cookie file (Render or local) ---
+# === Optional cookie file (used if available) ===
 SECRET_COOKIE_FILE_PATH = '/etc/secrets/cookies.txt'
 
-# --- Allow CORS ---
+# === Allow CORS ===
 @app.after_request
 def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -26,7 +26,7 @@ def add_cors_headers(response):
     return response
 
 
-# --- Main Download Endpoint ---
+# === Main Download Endpoint ===
 @app.route('/download', methods=['POST'])
 def download():
     data = request.get_json()
@@ -43,7 +43,7 @@ def download():
         'quiet': True,
     }
 
-    # --- Copy cookie file if available ---
+    # --- Copy cookie file if present ---
     if os.path.exists(SECRET_COOKIE_FILE_PATH):
         try:
             temp_cookie_file_path = os.path.join(DOWNLOAD_FOLDER, 'cookies_temp.txt')
@@ -55,7 +55,7 @@ def download():
     else:
         logging.warning(f"⚠️ No cookie file found at {SECRET_COOKIE_FILE_PATH}")
 
-    # --- Format handling ---
+    # --- Format Handling ---
     if format_choice == 'mp3':
         ydl_opts.update({
             'format': 'bestaudio/best',
@@ -71,7 +71,7 @@ def download():
             'merge_output_format': 'mp4',
         })
 
-    # --- Download ---
+    # --- Download Logic ---
     try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -85,7 +85,8 @@ def download():
                 logging.error(f"❌ File not found after download: {filename}")
                 return jsonify({'error': 'Downloaded file not found on server.'}), 500
 
-            file_url = request.host_url + 'downloads/' + quote(os.path.basename(filename))
+            safe_name = quote(os.path.basename(filename))
+            file_url = request.host_url + 'downloads/' + safe_name
 
             logging.info(f"✅ Download successful: {file_url}")
 
@@ -105,23 +106,31 @@ def download():
             logging.info("🧹 Cleaned up temporary cookie file.")
 
 
-# --- Serve Downloaded Files ---
+# === Serve Downloaded Files ===
 @app.route('/downloads/<path:filename>', methods=['GET'])
 def serve_file(filename):
-    response = send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True)
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
-    response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
-    return response
+    try:
+        safe_name = quote(filename)
+        response = make_response(
+            send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True)
+        )
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
+        # ✅ Proper UTF-8 filename header (RFC 5987)
+        response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{safe_name}"
+        return response
+    except Exception as e:
+        logging.error(f"❌ File serving error: {str(e)}")
+        return jsonify({'error': 'File not found'}), 404
 
 
-# --- Root check ---
+# === Root Check ===
 @app.route('/', methods=['GET'])
 def root():
-    return jsonify({"status": "YouTube Downloader Flask API running ✅"})
+    return jsonify({"status": "🎬 YouTube Downloader Flask API running ✅"})
 
 
+# === Start Server ===
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
