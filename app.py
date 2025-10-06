@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, make_response
 from yt_dlp import YoutubeDL
 from urllib.parse import quote
 import os
@@ -11,16 +11,13 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # --- Folder to save downloads ---
-# On Render, the filesystem is temporary. This is fine for this use case.
 DOWNLOAD_FOLDER = os.path.join(os.getcwd(), 'downloads')
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-# --- IMPORTANT: Path to the secret cookies file on Render ---
-# Render mounts secret files at /etc/secrets/<filename>.
-# This is the correct way to access the file you created.
+# --- Path to secret cookie file (Render or local) ---
 SECRET_COOKIE_FILE_PATH = '/etc/secrets/cookies.txt'
 
-# --- CORS Headers ---
+# --- Allow CORS ---
 @app.after_request
 def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -28,7 +25,8 @@ def add_cors_headers(response):
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
     return response
 
-# --- Download endpoint ---
+
+# --- Main Download Endpoint ---
 @app.route('/download', methods=['POST'])
 def download():
     data = request.get_json()
@@ -36,33 +34,29 @@ def download():
         return jsonify({'error': 'Missing URL'}), 400
 
     url = data['url']
-    format_choice = data.get('format', 'mp4')
-    
-    temp_cookie_file_path = None # To keep track of the temporary file
+    format_choice = data.get('format', 'mp4').lower()
+    temp_cookie_file_path = None
 
     ydl_opts = {
         'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
         'noplaylist': True,
-        'quiet': True, # Reduces console spam
+        'quiet': True,
     }
 
-    # --- Use cookies if the secret file exists at the specified path ---
+    # --- Copy cookie file if available ---
     if os.path.exists(SECRET_COOKIE_FILE_PATH):
         try:
-            # Create a temporary, writable copy of the read-only secret file
             temp_cookie_file_path = os.path.join(DOWNLOAD_FOLDER, 'cookies_temp.txt')
             shutil.copyfile(SECRET_COOKIE_FILE_PATH, temp_cookie_file_path)
-
             ydl_opts['cookiefile'] = temp_cookie_file_path
-            logging.info(f"Using temporary cookie file copied from {SECRET_COOKIE_FILE_PATH}")
+            logging.info(f"✅ Using cookies from {SECRET_COOKIE_FILE_PATH}")
         except Exception as e:
-            logging.error(f"Could not create temp cookie file: {e}")
-            temp_cookie_file_path = None # Ensure we don't try to use a failed copy
+            logging.error(f"⚠️ Failed to copy cookie file: {e}")
     else:
-        logging.warning(f"Secret cookie file not found at {SECRET_COOKIE_FILE_PATH}. Downloads may fail.")
+        logging.warning(f"⚠️ No cookie file found at {SECRET_COOKIE_FILE_PATH}")
 
-
-    if format_choice.lower() == 'mp3':
+    # --- Format handling ---
+    if format_choice == 'mp3':
         ydl_opts.update({
             'format': 'bestaudio/best',
             'postprocessors': [{
@@ -77,47 +71,62 @@ def download():
             'merge_output_format': 'mp4',
         })
 
+    # --- Download ---
     try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
-            if format_choice.lower() == 'mp3':
-                # The filename from ydl will have .webm or similar, we need to change it to .mp3
+
+            if format_choice == 'mp3':
                 base, _ = os.path.splitext(filename)
                 filename = base + '.mp3'
 
-
             if not os.path.exists(filename):
-                 logging.error(f"File not found after download: {filename}")
-                 return jsonify({'error': 'Downloaded file could not be found on the server.'}), 500
+                logging.error(f"❌ File not found after download: {filename}")
+                return jsonify({'error': 'Downloaded file not found on server.'}), 500
 
             file_url = request.host_url + 'downloads/' + quote(os.path.basename(filename))
 
-            logging.info(f"Successfully processed and serving file: {file_url}")
+            logging.info(f"✅ Download successful: {file_url}")
+
             return jsonify({
                 'file_url': file_url,
-                'format': format_choice.lower(),
+                'format': format_choice,
                 'title': info.get('title', 'Unknown Title')
             })
 
     except Exception as e:
-        # This provides a much more detailed error back to your Flutter app
-        logging.error(f"yt-dlp error: {str(e)}")
+        logging.error(f"❌ yt-dlp error: {str(e)}")
         return jsonify({'error': f"An error occurred: {str(e)}"}), 500
+
     finally:
-        # --- Clean up the temporary cookie file after the request is done ---
         if temp_cookie_file_path and os.path.exists(temp_cookie_file_path):
             os.remove(temp_cookie_file_path)
-            logging.info("Cleaned up temporary cookie file.")
+            logging.info("🧹 Cleaned up temporary cookie file.")
 
 
-# --- Serve downloaded files ---
+# --- Serve Downloaded Files ---
 @app.route('/downloads/<path:filename>', methods=['GET'])
 def serve_file(filename):
-    return send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True)
+    file_path = os.path.join(DOWNLOAD_FOLDER, filename)
+    if not os.path.exists(file_path):
+        return jsonify({'error': 'File not found'}), 404
+
+    response = make_response(send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True))
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+    response.headers["Content-Type"] = "application/octet-stream"
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+# --- Root check ---
+@app.route('/', methods=['GET'])
+def root():
+    return jsonify({"status": "YouTube Downloader Flask API running ✅"})
 
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
