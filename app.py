@@ -108,16 +108,10 @@ def download():
 # --- Serve Downloaded Files ---
 @app.route('/downloads/<path:filename>', methods=['GET'])
 def serve_file(filename):
-    file_path = os.path.join(DOWNLOAD_FOLDER, filename)
-    if not os.path.exists(file_path):
-        return jsonify({'error': 'File not found'}), 404
-
-    response = make_response(send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True))
-    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
-    response.headers["Content-Type"] = "application/octet-stream"
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
+    response = send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True)
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
+    response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
 
 
@@ -130,3 +124,4 @@ def root():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
